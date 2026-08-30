@@ -1,0 +1,16 @@
+{
+  "name": "partrocks/auth",
+  "description": "Server-side PartRocks Auth client",
+  "type": "library",
+  "license": "MIT",
+  "require": {
+    "php": ">=8.3",
+    "ext-curl": "*",
+    "ext-json": "*"
+  },
+  "autoload": {
+    "psr-4": {
+      "PartRocks\\Auth\\": "src/"
+    }
+  }
+}

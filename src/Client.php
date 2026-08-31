@@ -23,10 +23,16 @@ final class Client
         return $this->http->request('GET', '/api/v1/users');
     }
 
-    /** @param array<string, mixed> $body */
-    public function createUser(array $body): mixed
+    /**
+     * @param array<string, mixed> $body
+     * @param array{sendWelcomeMail?: array{mail: object, application: string, to?: string}}|null $options
+     */
+    public function createUser(array $body, ?array $options = null): mixed
     {
-        return $this->http->request('POST', '/api/v1/users', $body);
+        $auth = $this->http->request('POST', '/api/v1/users', $body);
+        $to = is_string($body['username'] ?? null) ? $body['username'] : '';
+
+        return $this->sendTemplateMail($auth, 'welcome', $to, $options['sendWelcomeMail'] ?? null);
     }
 
     public function getUser(string $id): mixed
@@ -62,10 +68,15 @@ final class Client
         return $this->http->request('POST', '/api/v1/sessions/verify', null, $accessToken);
     }
 
-    /** @param array{email: string, password: string} $body */
-    public function register(array $body): mixed
+    /**
+     * @param array{email: string, password: string} $body
+     * @param array{sendMail?: array{mail: object, application: string, to?: string}}|null $options
+     */
+    public function register(array $body, ?array $options = null): mixed
     {
-        return $this->http->request('POST', '/api/v2/auth/register', $body);
+        $auth = $this->http->request('POST', '/api/v2/auth/register', $body);
+
+        return $this->sendTemplateMail($auth, 'verification', $body['email'], $options['sendMail'] ?? null);
     }
 
     /** @param array{refreshToken: string} $body */
@@ -74,9 +85,13 @@ final class Client
         return $this->http->request('POST', '/api/v2/auth/logout', $body);
     }
 
-    public function requestEmailVerification(string $accessToken): mixed
+    /** @param array{sendMail?: array{mail: object, application: string, to?: string}}|null $options */
+    public function requestEmailVerification(string $accessToken, ?array $options = null): mixed
     {
-        return $this->http->request('POST', '/api/v2/auth/email-verifications/request', null, $accessToken);
+        $auth = $this->http->request('POST', '/api/v2/auth/email-verifications/request', null, $accessToken);
+        $sendMail = $options['sendMail'] ?? null;
+
+        return $this->sendTemplateMail($auth, 'verification', is_string($sendMail['to'] ?? null) ? $sendMail['to'] : '', $sendMail);
     }
 
     public function acceptEmailVerification(string $token, string $accessToken): mixed
@@ -84,10 +99,15 @@ final class Client
         return $this->http->request('POST', '/api/v2/auth/email-verifications/'.$token.'/accept', null, $accessToken);
     }
 
-    /** @param array{email: string} $body */
-    public function requestPasswordReset(array $body): mixed
+    /**
+     * @param array{email: string} $body
+     * @param array{sendMail?: array{mail: object, application: string, to?: string}}|null $options
+     */
+    public function requestPasswordReset(array $body, ?array $options = null): mixed
     {
-        return $this->http->request('POST', '/api/v2/auth/password-resets/request', $body);
+        $auth = $this->http->request('POST', '/api/v2/auth/password-resets/request', $body);
+
+        return $this->sendTemplateMail($auth, 'password-reset', $body['email'], $options['sendMail'] ?? null);
     }
 
     /** @param array{password: string} $body */
@@ -155,10 +175,15 @@ final class Client
         return $this->http->request('GET', '/api/v2/teams/'.$id.'/invitations', null, $accessToken);
     }
 
-    /** @param array{email: string} $body */
-    public function createInvitation(string $id, array $body, string $accessToken): mixed
+    /**
+     * @param array{email: string} $body
+     * @param array{sendMail?: array{mail: object, application: string, to?: string}}|null $options
+     */
+    public function createInvitation(string $id, array $body, string $accessToken, ?array $options = null): mixed
     {
-        return $this->http->request('POST', '/api/v2/teams/'.$id.'/invitations', $body, $accessToken);
+        $auth = $this->http->request('POST', '/api/v2/teams/'.$id.'/invitations', $body, $accessToken);
+
+        return $this->sendTemplateMail($auth, 'team-invitation', $body['email'], $options['sendMail'] ?? null);
     }
 
     public function revokeInvitation(string $id, string $invitationId, string $accessToken): mixed
@@ -169,5 +194,57 @@ final class Client
     public function acceptInvitation(string $token, string $accessToken): mixed
     {
         return $this->http->request('POST', '/api/v2/invitations/'.$token.'/accept', null, $accessToken);
+    }
+
+    /**
+     * @param array{mail: object, application: string, to?: string}|null $options
+     */
+    private function sendTemplateMail(mixed $auth, string $template, string $fallbackTo, ?array $options): mixed
+    {
+        if (null === $options) {
+            return $auth;
+        }
+
+        $payload = is_array($auth) ? $auth : ['auth' => $auth];
+        $to = is_string($options['to'] ?? null) ? $options['to'] : $fallbackTo;
+        $link = is_string($payload['link'] ?? null) ? $payload['link'] : '';
+        if ('' === $to || ('welcome' !== $template && '' === $link)) {
+            return $payload;
+        }
+
+        $metadata = ['application' => $options['application']];
+        if ('' !== $link) {
+            $metadata['link'] = $link;
+        }
+        if ('welcome' === $template) {
+            $metadata['username'] = $to;
+        }
+
+        try {
+            $this->invokeMailSend($options['mail'], [
+                'to' => $to,
+                'template' => $template,
+                'metadata' => $metadata,
+            ]);
+            $payload['mailSent'] = true;
+        } catch (\Throwable $error) {
+            $payload['mailSent'] = false;
+            $payload['mailError'] = $error->getMessage();
+        }
+
+        return $payload;
+    }
+
+    /** @param array<string, mixed> $body */
+    private function invokeMailSend(object $mail, array $body): mixed
+    {
+        if (isset($mail->messages) && is_object($mail->messages) && method_exists($mail->messages, 'send')) {
+            return $mail->messages->send($body);
+        }
+        if (method_exists($mail, 'send')) {
+            return $mail->send($body);
+        }
+
+        throw new \InvalidArgumentException('mail must provide send().');
     }
 }

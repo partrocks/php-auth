@@ -59,4 +59,70 @@ final class ClientTest extends TestCase
         self::assertSame('{"username":"alex@example.com","password":"secret"}', $captured['body']);
         self::assertSame('u1', $result['user']['id']);
     }
+
+    public function testSendsWelcomeMailAfterUserCreateWithoutRollingBack(): void
+    {
+        $sent = [];
+        $client = Client::create('https://auth.example', 'prk_test', fn (): array => [
+            'status' => 201,
+            'body' => '{"user":{"id":"u1"}}',
+        ]);
+        $mail = new class($sent) {
+            /** @param list<array<string, mixed>> $sent */
+            public function __construct(private array &$sent)
+            {
+            }
+
+            /** @param array<string, mixed> $body */
+            public function send(array $body): never
+            {
+                $this->sent[] = $body;
+                throw new \RuntimeException('smtp down');
+            }
+        };
+
+        $result = $client->createUser(
+            ['username' => 'alex@example.com', 'password' => 'secret'],
+            ['sendWelcomeMail' => ['mail' => $mail, 'application' => 'Acme']],
+        );
+
+        self::assertSame('u1', $result['user']['id']);
+        self::assertFalse($result['mailSent']);
+        self::assertSame('smtp down', $result['mailError']);
+        self::assertSame('welcome', $sent[0]['template']);
+        self::assertSame('alex@example.com', $sent[0]['to']);
+    }
+
+    public function testSendsPasswordResetMailFromReturnedLink(): void
+    {
+        $sent = [];
+        $client = Client::create('https://auth.example', 'prk_test', fn (): array => [
+            'status' => 200,
+            'body' => '{"accepted":true,"token":"tok","link":"https://app.example/reset?token=tok"}',
+        ]);
+        $mail = new class($sent) {
+            /** @param list<array<string, mixed>> $sent */
+            public function __construct(private array &$sent)
+            {
+            }
+
+            /** @param array<string, mixed> $body */
+            public function send(array $body): array
+            {
+                $this->sent[] = $body;
+
+                return ['message' => ['id' => 'm1']];
+            }
+        };
+
+        $result = $client->requestPasswordReset(
+            ['email' => 'alex@example.com'],
+            ['sendMail' => ['mail' => $mail, 'application' => 'Acme']],
+        );
+
+        self::assertTrue($result['accepted']);
+        self::assertTrue($result['mailSent']);
+        self::assertSame('password-reset', $sent[0]['template']);
+        self::assertSame('https://app.example/reset?token=tok', $sent[0]['metadata']['link']);
+    }
 }

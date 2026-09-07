@@ -116,84 +116,97 @@ final class Client
         return $this->http->request('POST', '/api/v2/auth/password-resets/'.$token.'/accept', $body);
     }
 
-    public function listTeams(string $accessToken): mixed
+    public function listOrganisations(string $accessToken): mixed
     {
-        return $this->http->request('GET', '/api/v2/teams', null, $accessToken);
+        return $this->http->request('GET', '/api/v2/organisations', null, $accessToken);
     }
 
     /** @param array{name: string, slug: string} $body */
-    public function createTeam(array $body, string $accessToken): mixed
+    public function createOrganisation(array $body, string $accessToken): mixed
     {
-        return $this->http->request('POST', '/api/v2/teams', $body, $accessToken);
+        return $this->http->request('POST', '/api/v2/organisations', $body, $accessToken);
     }
 
-    public function getTeam(string $id, string $accessToken): mixed
+    public function getOrganisation(string $id, string $accessToken): mixed
     {
-        return $this->http->request('GET', '/api/v2/teams/'.$id, null, $accessToken);
+        return $this->http->request('GET', '/api/v2/organisations/'.$id, null, $accessToken);
     }
 
     /** @param array{name?: string, slug?: string} $body */
-    public function updateTeam(string $id, array $body, string $accessToken): mixed
+    public function updateOrganisation(string $id, array $body, string $accessToken): mixed
     {
-        return $this->http->request('PATCH', '/api/v2/teams/'.$id, $body, $accessToken);
+        return $this->http->request('PATCH', '/api/v2/organisations/'.$id, $body, $accessToken);
     }
 
-    public function deleteTeam(string $id, string $accessToken): mixed
+    public function deleteOrganisation(string $id, string $accessToken): mixed
     {
-        return $this->http->request('DELETE', '/api/v2/teams/'.$id, null, $accessToken);
+        return $this->http->request('DELETE', '/api/v2/organisations/'.$id, null, $accessToken);
     }
 
-    public function teamMembership(string $id, string $accessToken): mixed
+    public function getCurrentOrganisationMembership(string $id, string $accessToken): mixed
     {
-        return $this->http->request('GET', '/api/v2/teams/'.$id.'/membership', null, $accessToken);
+        return $this->http->request('GET', '/api/v2/organisations/'.$id.'/membership', null, $accessToken);
     }
 
-    public function listMembers(string $id, string $accessToken): mixed
+    public function leaveOrganisation(string $id, string $accessToken): mixed
     {
-        return $this->http->request('GET', '/api/v2/teams/'.$id.'/members', null, $accessToken);
+        return $this->http->request('DELETE', '/api/v2/organisations/'.$id.'/membership', null, $accessToken);
     }
 
-    /** @param array{userId: string, role?: string} $body */
-    public function addMember(string $id, array $body, string $accessToken): mixed
+    public function listOrganisationMembers(string $id, string $accessToken): mixed
     {
-        return $this->http->request('POST', '/api/v2/teams/'.$id.'/members', $body, $accessToken);
+        return $this->http->request('GET', '/api/v2/organisations/'.$id.'/members', null, $accessToken);
     }
 
-    /** @param array{role: string} $body */
-    public function updateMember(string $id, string $userId, array $body, string $accessToken): mixed
+    /** @param array{userId: string, role?: 'admin'|'user'} $body */
+    public function addOrganisationMember(string $id, array $body, string $accessToken): mixed
     {
-        return $this->http->request('PATCH', '/api/v2/teams/'.$id.'/members/'.$userId, $body, $accessToken);
+        return $this->http->request('POST', '/api/v2/organisations/'.$id.'/members', $body, $accessToken);
     }
 
-    public function removeMember(string $id, string $userId, string $accessToken): mixed
+    /** @param array{role: 'admin'|'user'} $body */
+    public function changeOrganisationMemberRole(string $id, string $userId, array $body, string $accessToken): mixed
     {
-        return $this->http->request('DELETE', '/api/v2/teams/'.$id.'/members/'.$userId, null, $accessToken);
+        return $this->http->request('PATCH', '/api/v2/organisations/'.$id.'/members/'.$userId, $body, $accessToken);
     }
 
-    public function listInvitations(string $id, string $accessToken): mixed
+    public function removeOrganisationMember(string $id, string $userId, string $accessToken): mixed
     {
-        return $this->http->request('GET', '/api/v2/teams/'.$id.'/invitations', null, $accessToken);
+        return $this->http->request('DELETE', '/api/v2/organisations/'.$id.'/members/'.$userId, null, $accessToken);
+    }
+
+    public function listOrganisationInvitations(string $id, string $accessToken): mixed
+    {
+        return $this->http->request('GET', '/api/v2/organisations/'.$id.'/invitations', null, $accessToken);
     }
 
     /**
      * @param array{email: string} $body
      * @param array{sendMail?: array{mail: object, application: string, to?: string}}|null $options
      */
-    public function createInvitation(string $id, array $body, string $accessToken, ?array $options = null): mixed
+    public function createOrganisationInvitation(string $id, array $body, string $accessToken, ?array $options = null): mixed
     {
-        $auth = $this->http->request('POST', '/api/v2/teams/'.$id.'/invitations', $body, $accessToken);
+        $auth = $this->http->request('POST', '/api/v2/organisations/'.$id.'/invitations', $body, $accessToken);
 
-        return $this->sendTemplateMail($auth, 'team-invitation', $body['email'], $options['sendMail'] ?? null);
+        return $this->sendTemplateMail($auth, 'organisation-invitation', $body['email'], $options['sendMail'] ?? null);
     }
 
-    public function revokeInvitation(string $id, string $invitationId, string $accessToken): mixed
+    public function revokeOrganisationInvitation(string $id, string $invitationId, string $accessToken): mixed
     {
-        return $this->http->request('DELETE', '/api/v2/teams/'.$id.'/invitations/'.$invitationId, null, $accessToken);
+        return $this->http->request('DELETE', '/api/v2/organisations/'.$id.'/invitations/'.$invitationId, null, $accessToken);
     }
 
-    public function acceptInvitation(string $token, string $accessToken): mixed
+    /** @param array{accessToken: string}|array{password: string} $options */
+    public function acceptInvitation(string $token, array $options): mixed
     {
-        return $this->http->request('POST', '/api/v2/invitations/'.$token.'/accept', null, $accessToken);
+        if (isset($options['accessToken']) && is_string($options['accessToken'])) {
+            return $this->http->request('POST', '/api/v2/invitations/'.$token.'/accept', null, $options['accessToken']);
+        }
+        if (isset($options['password']) && is_string($options['password'])) {
+            return $this->http->request('POST', '/api/v2/invitations/'.$token.'/accept', ['password' => $options['password']]);
+        }
+
+        throw new \InvalidArgumentException('acceptInvitation requires accessToken or password.');
     }
 
     /**

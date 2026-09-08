@@ -1,7 +1,7 @@
 {
   "name": "partrocks/auth",
   "description": "Server-side PartRocks Auth client",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "type": "library",
   "license": "MIT",
   "require": {

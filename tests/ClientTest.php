@@ -43,6 +43,23 @@ final class ClientTest extends TestCase
         }
     }
 
+    public function testThrowsPartRocksErrorForFinalAdminUserDelete(): void
+    {
+        $client = Client::create('https://auth.example', 'prk_test', fn (): array => [
+            'status' => 409,
+            'body' => '{"error":"The final organisation admin cannot be deleted.","code":"final_admin","organisations":[{"id":"11111111-1111-1111-1111-111111111111","name":"Acme"}]}',
+        ]);
+
+        try {
+            $client->deleteUser('u1');
+            self::fail('Expected PartRocksError');
+        } catch (PartRocksError $error) {
+            self::assertSame('final_admin', $error->errorCode);
+            self::assertSame(409, $error->status);
+            self::assertSame('The final organisation admin cannot be deleted.', $error->getMessage());
+        }
+    }
+
     public function testPostsUserBody(): void
     {
         $captured = [];

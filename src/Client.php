@@ -46,6 +46,9 @@ final class Client
         return $this->http->request('PATCH', '/api/v1/users/'.$id, $body);
     }
 
+    /**
+     * Auth returns 409 `final_admin` with `organisations: [{ id, name }]` when the user is the last admin of any organisation.
+     */
     public function deleteUser(string $id): mixed
     {
         return $this->http->request('DELETE', '/api/v1/users/'.$id);

@@ -85,18 +85,21 @@ final class Client
         return $this->http->request('POST', '/api/v2/auth/logout', $body);
     }
 
-    /** @param array{sendMail?: array{mail: object, application: string, to?: string}}|null $options */
-    public function requestEmailVerification(string $accessToken, ?array $options = null): mixed
+    /**
+     * @param array{email: string} $body
+     * @param array{sendMail?: array{mail: object, application: string, to?: string}}|null $options
+     */
+    public function requestEmailVerification(array $body, ?array $options = null): mixed
     {
-        $auth = $this->http->request('POST', '/api/v2/auth/email-verifications/request', null, $accessToken);
-        $sendMail = $options['sendMail'] ?? null;
+        $auth = $this->http->request('POST', '/api/v2/auth/email-verifications/request', $body);
 
-        return $this->sendTemplateMail($auth, 'verification', is_string($sendMail['to'] ?? null) ? $sendMail['to'] : '', $sendMail);
+        return $this->sendTemplateMail($auth, 'verification', $body['email'], $options['sendMail'] ?? null);
     }
 
-    public function acceptEmailVerification(string $token, string $accessToken): mixed
+    /** @param array{email: string, code: string} $body */
+    public function confirmEmailVerification(array $body): mixed
     {
-        return $this->http->request('POST', '/api/v2/auth/email-verifications/'.$token.'/accept', null, $accessToken);
+        return $this->http->request('POST', '/api/v2/auth/email-verifications/confirm', $body);
     }
 
     /**
@@ -110,10 +113,10 @@ final class Client
         return $this->sendTemplateMail($auth, 'password-reset', $body['email'], $options['sendMail'] ?? null);
     }
 
-    /** @param array{password: string} $body */
-    public function acceptPasswordReset(string $token, array $body): mixed
+    /** @param array{email: string, code: string, password: string} $body */
+    public function confirmPasswordReset(array $body): mixed
     {
-        return $this->http->request('POST', '/api/v2/auth/password-resets/'.$token.'/accept', $body);
+        return $this->http->request('POST', '/api/v2/auth/password-resets/confirm', $body);
     }
 
     public function listOrganisations(string $accessToken): mixed
@@ -196,14 +199,23 @@ final class Client
         return $this->http->request('DELETE', '/api/v2/organisations/'.$id.'/invitations/'.$invitationId, null, $accessToken);
     }
 
-    /** @param array{accessToken: string}|array{password: string} $options */
-    public function acceptInvitation(string $token, array $options): mixed
+    /**
+     * @param array{email: string, code: string, accessToken: string}|array{email: string, code: string, password: string} $options
+     */
+    public function acceptInvitation(array $options): mixed
     {
+        if (!isset($options['email'], $options['code']) || !is_string($options['email']) || !is_string($options['code'])) {
+            throw new \InvalidArgumentException('acceptInvitation requires email and code.');
+        }
+
+        $body = ['email' => $options['email'], 'code' => $options['code']];
         if (isset($options['accessToken']) && is_string($options['accessToken'])) {
-            return $this->http->request('POST', '/api/v2/invitations/'.$token.'/accept', null, $options['accessToken']);
+            return $this->http->request('POST', '/api/v2/invitations/accept', $body, $options['accessToken']);
         }
         if (isset($options['password']) && is_string($options['password'])) {
-            return $this->http->request('POST', '/api/v2/invitations/'.$token.'/accept', ['password' => $options['password']]);
+            $body['password'] = $options['password'];
+
+            return $this->http->request('POST', '/api/v2/invitations/accept', $body);
         }
 
         throw new \InvalidArgumentException('acceptInvitation requires accessToken or password.');
@@ -220,14 +232,14 @@ final class Client
 
         $payload = is_array($auth) ? $auth : ['auth' => $auth];
         $to = is_string($options['to'] ?? null) ? $options['to'] : $fallbackTo;
-        $link = is_string($payload['link'] ?? null) ? $payload['link'] : '';
-        if ('' === $to || ('welcome' !== $template && '' === $link)) {
+        $code = is_string($payload['code'] ?? null) ? $payload['code'] : '';
+        if ('' === $to || ('welcome' !== $template && '' === $code)) {
             return $payload;
         }
 
         $metadata = ['application' => $options['application']];
-        if ('' !== $link) {
-            $metadata['link'] = $link;
+        if ('' !== $code) {
+            $metadata['code'] = $code;
         }
         if ('welcome' === $template) {
             $metadata['username'] = $to;

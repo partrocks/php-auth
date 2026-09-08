@@ -93,12 +93,12 @@ final class ClientTest extends TestCase
         self::assertSame('alex@example.com', $sent[0]['to']);
     }
 
-    public function testSendsPasswordResetMailFromReturnedLink(): void
+    public function testSendsPasswordResetMailFromReturnedCode(): void
     {
         $sent = [];
         $client = Client::create('https://auth.example', 'prk_test', fn (): array => [
             'status' => 200,
-            'body' => '{"accepted":true,"token":"tok","link":"https://app.example/reset?token=tok"}',
+            'body' => '{"accepted":true,"code":"123456","expiresAt":"2026-09-09T12:00:00Z"}',
         ]);
         $mail = new class($sent) {
             /** @param list<array<string, mixed>> $sent */
@@ -123,7 +123,64 @@ final class ClientTest extends TestCase
         self::assertTrue($result['accepted']);
         self::assertTrue($result['mailSent']);
         self::assertSame('password-reset', $sent[0]['template']);
-        self::assertSame('https://app.example/reset?token=tok', $sent[0]['metadata']['link']);
+        self::assertSame('123456', $sent[0]['metadata']['code']);
+    }
+
+    public function testDoesNotSendAccountActionMailWhenAuthOmitsCode(): void
+    {
+        $sendCount = 0;
+        $client = Client::create('https://auth.example', 'prk_test', fn (): array => [
+            'status' => 200,
+            'body' => '{"accepted":true}',
+        ]);
+        $mail = new class($sendCount) {
+            public function __construct(private int &$sendCount)
+            {
+            }
+
+            /** @param array<string, mixed> $body */
+            public function send(array $body): void
+            {
+                ++$this->sendCount;
+            }
+        };
+
+        $result = $client->requestPasswordReset(
+            ['email' => 'unknown@example.com'],
+            ['sendMail' => ['mail' => $mail, 'application' => 'Acme']],
+        );
+
+        self::assertTrue($result['accepted']);
+        self::assertArrayNotHasKey('mailSent', $result);
+        self::assertSame(0, $sendCount);
+    }
+
+    public function testRequestsAndConfirmsAccountActionsWithEmailAndCodeBodies(): void
+    {
+        $calls = [];
+        $client = Client::create('https://auth.example', 'prk_test', function (string $method, string $url, array $headers, ?string $body) use (&$calls): array {
+            $calls[] = compact('url', 'headers', 'body');
+
+            return ['status' => 200, 'body' => '{}'];
+        });
+
+        $client->requestEmailVerification(['email' => 'alex@example.com']);
+        $client->confirmEmailVerification(['email' => 'alex@example.com', 'code' => '123456']);
+        $client->confirmPasswordReset([
+            'email' => 'alex@example.com',
+            'code' => '654321',
+            'password' => 'new-password',
+        ]);
+
+        self::assertSame('https://auth.example/api/v2/auth/email-verifications/request', $calls[0]['url']);
+        self::assertSame('{"email":"alex@example.com"}', $calls[0]['body']);
+        self::assertArrayNotHasKey('Authorization', $calls[0]['headers']);
+        self::assertSame('https://auth.example/api/v2/auth/email-verifications/confirm', $calls[1]['url']);
+        self::assertSame('{"email":"alex@example.com","code":"123456"}', $calls[1]['body']);
+        self::assertArrayNotHasKey('Authorization', $calls[1]['headers']);
+        self::assertSame('https://auth.example/api/v2/auth/password-resets/confirm', $calls[2]['url']);
+        self::assertSame('{"email":"alex@example.com","code":"654321","password":"new-password"}', $calls[2]['body']);
+        self::assertArrayNotHasKey('Authorization', $calls[2]['headers']);
     }
 
     public function testMapsTheCompleteOrganisationsApi(): void
@@ -166,7 +223,7 @@ final class ClientTest extends TestCase
         self::assertSame('{"role":"user"}', $calls[8]['body']);
     }
 
-    public function testSendsOrganisationInvitationMailFromReturnedLink(): void
+    public function testSendsOrganisationInvitationMailFromReturnedCode(): void
     {
         $sent = [];
         $requestUrl = null;
@@ -175,7 +232,7 @@ final class ClientTest extends TestCase
 
             return [
                 'status' => 201,
-                'body' => '{"invited":true,"link":"https://app.example/invite?token=tok"}',
+                'body' => '{"invited":true,"code":"123456","expiresAt":"2026-09-09T12:00:00Z"}',
             ];
         });
         $mail = new class($sent) {
@@ -203,25 +260,27 @@ final class ClientTest extends TestCase
         self::assertSame('https://auth.example/api/v2/organisations/o1/invitations', $requestUrl);
         self::assertSame('organisation-invitation', $sent[0]['template']);
         self::assertSame('invitee@example.com', $sent[0]['to']);
-        self::assertSame('https://app.example/invite?token=tok', $sent[0]['metadata']['link']);
+        self::assertSame('123456', $sent[0]['metadata']['code']);
     }
 
-    public function testAcceptsInvitationWithBearerTokenOrPassword(): void
+    public function testAcceptsInvitationByBodyWithBearerTokenOrPassword(): void
     {
         $calls = [];
         $client = Client::create('https://auth.example', 'prk_test', function (string $method, string $url, array $headers, ?string $body) use (&$calls): array {
-            $calls[] = compact('headers', 'body');
+            $calls[] = compact('url', 'headers', 'body');
 
             return ['status' => 200, 'body' => '{"organisation":{"id":"o1","role":"user"}}'];
         });
 
-        $client->acceptInvitation('tok', ['accessToken' => 'jwt']);
-        $client->acceptInvitation('tok', ['password' => 'new-password']);
+        $client->acceptInvitation(['email' => 'alex@example.com', 'code' => '123456', 'accessToken' => 'jwt']);
+        $client->acceptInvitation(['email' => 'new@example.com', 'code' => '654321', 'password' => 'new-password']);
 
+        self::assertSame('https://auth.example/api/v2/invitations/accept', $calls[0]['url']);
         self::assertSame('Bearer jwt', $calls[0]['headers']['Authorization']);
-        self::assertNull($calls[0]['body']);
+        self::assertSame('{"email":"alex@example.com","code":"123456"}', $calls[0]['body']);
+        self::assertSame('https://auth.example/api/v2/invitations/accept', $calls[1]['url']);
         self::assertArrayNotHasKey('Authorization', $calls[1]['headers']);
-        self::assertSame('{"password":"new-password"}', $calls[1]['body']);
+        self::assertSame('{"email":"new@example.com","code":"654321","password":"new-password"}', $calls[1]['body']);
     }
 
     public function testAcceptInvitationRequiresCredentials(): void
@@ -232,6 +291,6 @@ final class ClientTest extends TestCase
         ]);
 
         $this->expectException(\InvalidArgumentException::class);
-        $client->acceptInvitation('tok', []);
+        $client->acceptInvitation([]);
     }
 }

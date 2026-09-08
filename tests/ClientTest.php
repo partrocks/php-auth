@@ -7,13 +7,46 @@ namespace PartRocks\Auth\Tests;
 use PartRocks\Auth\Client;
 use PartRocks\Auth\PartRocksError;
 use PHPUnit\Framework\TestCase;
+use ReflectionMethod;
 
 final class ClientTest extends TestCase
 {
+    public function testCreateHasNoEnvironmentArgument(): void
+    {
+        $method = new ReflectionMethod(Client::class, 'create');
+        $names = array_map(
+            static fn (\ReflectionParameter $parameter): string => $parameter->getName(),
+            $method->getParameters(),
+        );
+
+        self::assertSame(['apiKey', 'baseUrl', 'transport'], $names);
+        self::assertTrue($method->getParameters()[1]->allowsNull());
+    }
+
+    public function testDefaultsToHostedOriginWhenBaseUrlOmittedOrBlank(): void
+    {
+        $urls = [];
+        $transport = function (string $method, string $url) use (&$urls): array {
+            $urls[] = $url;
+
+            return ['status' => 200, 'body' => '{"organisations":[]}'];
+        };
+
+        Client::create('prk_test', null, $transport)->listOrganisations('jwt');
+        Client::create('prk_test', '   ', $transport)->listOrganisations('jwt');
+        Client::create('prk_test', transport: $transport)->listOrganisations('jwt');
+
+        self::assertSame([
+            'https://auth.part.rocks/api/v2/organisations',
+            'https://auth.part.rocks/api/v2/organisations',
+            'https://auth.part.rocks/api/v2/organisations',
+        ], $urls);
+    }
+
     public function testSendsApiKeyAndBearer(): void
     {
         $captured = [];
-        $client = Client::create('https://auth.example/', 'prk_test', function (string $method, string $url, array $headers, ?string $body) use (&$captured): array {
+        $client = Client::create('prk_test', 'https://auth.example/', function (string $method, string $url, array $headers, ?string $body) use (&$captured): array {
             $captured = compact('method', 'url', 'headers', 'body');
 
             return ['status' => 200, 'body' => '{"organisations":[]}'];
@@ -29,7 +62,7 @@ final class ClientTest extends TestCase
 
     public function testThrowsPartRocksError(): void
     {
-        $client = Client::create('https://auth.example', 'prk_test', fn (): array => [
+        $client = Client::create('prk_test', 'https://auth.example', fn (): array => [
             'status' => 401,
             'body' => '{"error":"The username or password is invalid.","code":"invalid_credentials"}',
         ]);
@@ -45,7 +78,7 @@ final class ClientTest extends TestCase
 
     public function testThrowsPartRocksErrorForFinalAdminUserDelete(): void
     {
-        $client = Client::create('https://auth.example', 'prk_test', fn (): array => [
+        $client = Client::create('prk_test', 'https://auth.example', fn (): array => [
             'status' => 409,
             'body' => '{"error":"The final organisation admin cannot be deleted.","code":"final_admin","organisations":[{"id":"11111111-1111-1111-1111-111111111111","name":"Acme"}]}',
         ]);
@@ -63,7 +96,7 @@ final class ClientTest extends TestCase
     public function testPostsUserBody(): void
     {
         $captured = [];
-        $client = Client::create('https://auth.example', 'prk_test', function (string $method, string $url, array $headers, ?string $body) use (&$captured): array {
+        $client = Client::create('prk_test', 'https://auth.example', function (string $method, string $url, array $headers, ?string $body) use (&$captured): array {
             $captured = compact('method', 'url', 'body');
 
             return ['status' => 201, 'body' => '{"user":{"id":"u1"}}'];
@@ -80,7 +113,7 @@ final class ClientTest extends TestCase
     public function testSendsWelcomeMailAfterUserCreateWithoutRollingBack(): void
     {
         $sent = [];
-        $client = Client::create('https://auth.example', 'prk_test', fn (): array => [
+        $client = Client::create('prk_test', 'https://auth.example', fn (): array => [
             'status' => 201,
             'body' => '{"user":{"id":"u1"}}',
         ]);
@@ -113,7 +146,7 @@ final class ClientTest extends TestCase
     public function testSendsPasswordResetMailFromReturnedCode(): void
     {
         $sent = [];
-        $client = Client::create('https://auth.example', 'prk_test', fn (): array => [
+        $client = Client::create('prk_test', 'https://auth.example', fn (): array => [
             'status' => 200,
             'body' => '{"accepted":true,"code":"123456","expiresAt":"2026-09-09T12:00:00Z"}',
         ]);
@@ -146,7 +179,7 @@ final class ClientTest extends TestCase
     public function testDoesNotSendAccountActionMailWhenAuthOmitsCode(): void
     {
         $sendCount = 0;
-        $client = Client::create('https://auth.example', 'prk_test', fn (): array => [
+        $client = Client::create('prk_test', 'https://auth.example', fn (): array => [
             'status' => 200,
             'body' => '{"accepted":true}',
         ]);
@@ -175,7 +208,7 @@ final class ClientTest extends TestCase
     public function testRequestsAndConfirmsAccountActionsWithEmailAndCodeBodies(): void
     {
         $calls = [];
-        $client = Client::create('https://auth.example', 'prk_test', function (string $method, string $url, array $headers, ?string $body) use (&$calls): array {
+        $client = Client::create('prk_test', 'https://auth.example', function (string $method, string $url, array $headers, ?string $body) use (&$calls): array {
             $calls[] = compact('url', 'headers', 'body');
 
             return ['status' => 200, 'body' => '{}'];
@@ -203,7 +236,7 @@ final class ClientTest extends TestCase
     public function testMapsTheCompleteOrganisationsApi(): void
     {
         $calls = [];
-        $client = Client::create('https://auth.example', 'prk_test', function (string $method, string $url, array $headers, ?string $body) use (&$calls): array {
+        $client = Client::create('prk_test', 'https://auth.example', function (string $method, string $url, array $headers, ?string $body) use (&$calls): array {
             $calls[] = compact('method', 'url', 'body');
 
             return ['status' => 200, 'body' => '{}'];
@@ -244,7 +277,7 @@ final class ClientTest extends TestCase
     {
         $sent = [];
         $requestUrl = null;
-        $client = Client::create('https://auth.example', 'prk_test', function (string $method, string $url) use (&$requestUrl): array {
+        $client = Client::create('prk_test', 'https://auth.example', function (string $method, string $url) use (&$requestUrl): array {
             $requestUrl = $url;
 
             return [
@@ -283,7 +316,7 @@ final class ClientTest extends TestCase
     public function testAcceptsInvitationByBodyWithBearerTokenOrPassword(): void
     {
         $calls = [];
-        $client = Client::create('https://auth.example', 'prk_test', function (string $method, string $url, array $headers, ?string $body) use (&$calls): array {
+        $client = Client::create('prk_test', 'https://auth.example', function (string $method, string $url, array $headers, ?string $body) use (&$calls): array {
             $calls[] = compact('url', 'headers', 'body');
 
             return ['status' => 200, 'body' => '{"organisation":{"id":"o1","role":"user"}}'];
@@ -302,7 +335,7 @@ final class ClientTest extends TestCase
 
     public function testAcceptInvitationRequiresCredentials(): void
     {
-        $client = Client::create('https://auth.example', 'prk_test', fn (): array => [
+        $client = Client::create('prk_test', 'https://auth.example', fn (): array => [
             'status' => 200,
             'body' => '{}',
         ]);

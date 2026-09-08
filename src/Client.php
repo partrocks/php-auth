@@ -13,9 +13,12 @@ final class Client
     /**
      * @param null|callable(string, string, array<string, string>, ?string): array{status: int, body: string} $transport
      */
-    public static function create(string $baseUrl, string $apiKey, ?callable $transport = null): self
+    public static function create(string $apiKey, ?string $baseUrl = null, ?callable $transport = null): self
     {
-        return new self(new Http(rtrim($baseUrl, '/'), $apiKey, $transport));
+        $trimmed = null === $baseUrl ? '' : trim($baseUrl);
+        $origin = '' === $trimmed ? 'https://auth.part.rocks' : $trimmed;
+
+        return new self(new Http(rtrim($origin, '/'), $apiKey, $transport));
     }
 
     public function listUsers(): mixed

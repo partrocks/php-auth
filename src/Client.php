@@ -57,18 +57,27 @@ final class Client
         return $this->http->request('DELETE', '/api/v1/users/'.$id);
     }
 
-    /** @param array{username: string, password: string} $body */
+    /**
+     * @param array{username: string, password: string} $body
+     * @return array{token: string, tokenType: string, expiresIn: int, refreshToken: string, refreshExpiresIn: int, sessionId: string, user: array<string, mixed>}
+     */
     public function createSession(array $body): mixed
     {
         return $this->http->request('POST', '/api/v1/sessions', $body);
     }
 
-    /** @param array{refreshToken: string} $body */
+    /**
+     * @param array{refreshToken: string} $body
+     * @return array{token: string, tokenType: string, expiresIn: int, refreshToken: string, refreshExpiresIn: int, sessionId: string, user: array<string, mixed>}
+     */
     public function refreshSession(array $body): mixed
     {
         return $this->http->request('POST', '/api/v1/sessions/refresh', $body);
     }
 
+    /**
+     * @return array{valid: bool, expiresAt: string, sessionId?: string, user: array<string, mixed>}
+     */
     public function verifySession(string $accessToken): mixed
     {
         return $this->http->request('POST', '/api/v1/sessions/verify', null, $accessToken);
@@ -102,7 +111,10 @@ final class Client
         return $this->sendTemplateMail($auth, 'verification', $body['email'], $options['sendMail'] ?? null);
     }
 
-    /** @param array{email: string, code: string} $body */
+    /**
+     * @param array{email: string, code: string} $body
+     * @return array{token: string, tokenType: string, expiresIn: int, refreshToken: string, refreshExpiresIn: int, sessionId: string, user: array<string, mixed>}
+     */
     public function confirmEmailVerification(array $body): mixed
     {
         return $this->http->request('POST', '/api/v2/auth/email-verifications/confirm', $body);
@@ -206,7 +218,10 @@ final class Client
     }
 
     /**
+     * Password-setup path returns a session envelope including sessionId. Bearer accept stays organisation-only.
+     *
      * @param array{email: string, code: string, accessToken: string}|array{email: string, code: string, password: string} $options
+     * @return mixed
      */
     public function acceptInvitation(array $options): mixed
     {

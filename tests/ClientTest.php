@@ -313,6 +313,45 @@ final class ClientTest extends TestCase
         self::assertSame('123456', $sent[0]['metadata']['code']);
     }
 
+    public function testPassesSessionIdThroughOnCreateRefreshVerifyConfirmAndInviteSetup(): void
+    {
+        $sessionId = '11111111-1111-4111-8111-111111111111';
+        $envelope = '{"token":"jwt","tokenType":"Bearer","expiresIn":300,"refreshToken":"rt","refreshExpiresIn":2592000,"sessionId":"'.$sessionId.'","user":{"id":"u1","username":"alex@example.com"}}';
+        $verify = '{"valid":true,"expiresAt":"2026-09-12T12:00:00+00:00","sessionId":"'.$sessionId.'","user":{"id":"u1","username":"alex@example.com"}}';
+        $client = Client::create('prk_test', 'https://auth.example', function (string $method, string $url) use ($envelope, $verify): array {
+            $body = str_ends_with($url, '/api/v1/sessions/verify') ? $verify : $envelope;
+
+            return ['status' => 200, 'body' => $body];
+        });
+
+        self::assertSame($sessionId, $client->createSession(['username' => 'a', 'password' => 'b'])['sessionId']);
+        self::assertSame($sessionId, $client->refreshSession(['refreshToken' => 'rt'])['sessionId']);
+        self::assertSame($sessionId, $client->verifySession('jwt')['sessionId']);
+        self::assertSame($sessionId, $client->confirmEmailVerification(['email' => 'alex@example.com', 'code' => '123456'])['sessionId']);
+        self::assertSame($sessionId, $client->acceptInvitation([
+            'email' => 'new@example.com',
+            'code' => '654321',
+            'password' => 'new-password',
+        ])['sessionId']);
+    }
+
+    public function testLogoutStillSendsOnlyRefreshToken(): void
+    {
+        $captured = [];
+        $client = Client::create('prk_test', 'https://auth.example', function (string $method, string $url, array $headers, ?string $body) use (&$captured): array {
+            $captured = compact('method', 'url', 'body');
+
+            return ['status' => 204, 'body' => ''];
+        });
+
+        $result = $client->logout(['refreshToken' => 'rt']);
+
+        self::assertNull($result);
+        self::assertSame('POST', $captured['method']);
+        self::assertSame('https://auth.example/api/v2/auth/logout', $captured['url']);
+        self::assertSame('{"refreshToken":"rt"}', $captured['body']);
+    }
+
     public function testAcceptsInvitationByBodyWithBearerTokenOrPassword(): void
     {
         $calls = [];

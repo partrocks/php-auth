@@ -11,6 +11,15 @@ use ReflectionMethod;
 
 final class ClientTest extends TestCase
 {
+    public function testHasNoCapabilityClientDependencies(): void
+    {
+        $package = json_decode((string) file_get_contents(__DIR__.'/../composer.json'), true, flags: JSON_THROW_ON_ERROR);
+
+        self::assertArrayNotHasKey('partrocks/analytics', $package['require']);
+        self::assertArrayNotHasKey('partrocks/mail', $package['require']);
+        self::assertArrayNotHasKey('partrocks/secrets', $package['require']);
+    }
+
     public function testCreateHasNoEnvironmentArgument(): void
     {
         $method = new ReflectionMethod(Client::class, 'create');
@@ -381,5 +390,267 @@ final class ClientTest extends TestCase
 
         $this->expectException(\InvalidArgumentException::class);
         $client->acceptInvitation([]);
+    }
+
+    public function testRecordsEveryMappedAuthSuccessWithAuthoritativeHelperMetadata(): void
+    {
+        $recorded = [];
+        $recorder = new class($recorded) {
+            /** @param list<array<string, mixed>> $recorded */
+            public function __construct(private array &$recorded)
+            {
+            }
+
+            /** @param array<string, mixed> $body */
+            public function record(array $body): array
+            {
+                $this->recorded[] = $body;
+
+                return ['recorded' => true];
+            }
+        };
+        $analytics = (object) ['events' => $recorder];
+        $baseRecord = [
+            'analytics' => $analytics,
+            'metadata' => [
+                'plan' => 'pro',
+                'source' => 'caller',
+                'organisationId' => 'caller-org',
+                'userId' => 'caller-user',
+                'sessionId' => 'caller-session',
+            ],
+        ];
+        $client = Client::create('prk_test', 'https://auth.example', static function (string $method, string $url, array $headers): array {
+            $path = (string) parse_url($url, PHP_URL_PATH);
+            if ('/api/v1/users' === $path) {
+                return ['status' => 201, 'body' => '{"user":{"id":"u-operator"}}'];
+            }
+            if ('/api/v2/auth/register' === $path) {
+                return ['status' => 201, 'body' => '{"user":{"id":"u-register"},"code":"123456"}'];
+            }
+            if ('/api/v1/sessions' === $path) {
+                return ['status' => 201, 'body' => '{"user":{"id":"u-login"},"sessionId":"s-login"}'];
+            }
+            if ('/api/v2/auth/logout' === $path) {
+                return ['status' => 204, 'body' => ''];
+            }
+            if ('/api/v2/auth/email-verifications/confirm' === $path) {
+                return ['status' => 200, 'body' => '{"user":{"id":"u-verified"},"sessionId":"s-verified"}'];
+            }
+            if ('/api/v2/auth/password-resets/confirm' === $path) {
+                return ['status' => 200, 'body' => '{"reset":true}'];
+            }
+            if ('/api/v2/organisations' === $path) {
+                return ['status' => 201, 'body' => '{"organisation":{"id":"o-created"}}'];
+            }
+            if ('/api/v2/organisations/o-invite/invitations' === $path) {
+                return ['status' => 201, 'body' => '{"invited":true,"code":"654321"}'];
+            }
+            if ('/api/v2/invitations/accept' === $path && isset($headers['Authorization'])) {
+                return ['status' => 200, 'body' => '{"organisation":{"id":"o-accepted"}}'];
+            }
+            if ('/api/v2/invitations/accept' === $path) {
+                return ['status' => 200, 'body' => '{"organisation":{"id":"o-setup"},"user":{"id":"u-setup"},"sessionId":"s-setup"}'];
+            }
+            if ('/api/v2/organisations/o-add/members' === $path) {
+                return ['status' => 201, 'body' => '{"member":{"userId":"u-added"}}'];
+            }
+            if ('DELETE' === $method) {
+                return ['status' => 204, 'body' => ''];
+            }
+
+            throw new \RuntimeException('Unexpected Auth request: '.$method.' '.$path);
+        });
+
+        $client->createUser(['username' => 'operator@example.com'], ['recordAnalytics' => $baseRecord]);
+        $client->register(['email' => 'register@example.com', 'password' => 'password'], ['recordAnalytics' => $baseRecord]);
+        $client->createSession(['username' => 'login@example.com', 'password' => 'password'], ['recordAnalytics' => $baseRecord]);
+        $client->logout(['refreshToken' => 'rt'], ['recordAnalytics' => [
+            'analytics' => $analytics,
+            'metadata' => ['plan' => 'pro', 'userId' => 'u-logout', 'sessionId' => 's-logout'],
+        ]]);
+        $client->confirmEmailVerification(['email' => 'verified@example.com', 'code' => '123456'], ['recordAnalytics' => $baseRecord]);
+        $client->confirmPasswordReset(
+            ['email' => 'reset@example.com', 'code' => '123456', 'password' => 'password'],
+            ['recordAnalytics' => ['analytics' => $analytics, 'metadata' => ['plan' => 'pro', 'userId' => 'u-reset']]],
+        );
+        $client->createOrganisation(['name' => 'Created', 'slug' => 'created'], 'jwt', ['recordAnalytics' => $baseRecord]);
+        $client->createOrganisationInvitation('o-invite', ['email' => 'invitee@example.com'], 'jwt', ['recordAnalytics' => [
+            'analytics' => $analytics,
+            'metadata' => ['plan' => 'pro', 'organisationId' => 'caller-org', 'invitationId' => 'i-invite', 'inviterUserId' => 'u-inviter'],
+        ]]);
+        $client->acceptInvitation([
+            'email' => 'member@example.com',
+            'code' => '123456',
+            'accessToken' => 'jwt',
+            'recordAnalytics' => [
+                'analytics' => $analytics,
+                'metadata' => ['plan' => 'pro', 'organisationId' => 'caller-org', 'invitationId' => 'i-accepted', 'inviterUserId' => 'u-inviter', 'userId' => 'u-accepted'],
+            ],
+        ]);
+        $client->acceptInvitation([
+            'email' => 'new@example.com',
+            'code' => '123456',
+            'password' => 'password',
+            'recordAnalytics' => [
+                'analytics' => $analytics,
+                'metadata' => ['plan' => 'pro', 'organisationId' => 'caller-org', 'invitationId' => 'i-setup', 'inviterUserId' => 'u-inviter', 'userId' => 'caller-user'],
+            ],
+        ]);
+        $client->addOrganisationMember('o-add', ['userId' => 'u-added'], 'jwt', ['recordAnalytics' => $baseRecord]);
+        $client->removeOrganisationMember('o-remove', 'u-removed', 'jwt', ['recordAnalytics' => $baseRecord]);
+        $client->leaveOrganisation('o-leave', 'jwt', ['recordAnalytics' => [
+            'analytics' => $analytics,
+            'metadata' => ['plan' => 'pro', 'organisationId' => 'caller-org', 'userId' => 'u-left'],
+        ]]);
+
+        self::assertSame([
+            ['metric' => 'auth.user_created', 'metadata' => array_replace($baseRecord['metadata'], ['userId' => 'u-operator', 'source' => 'operator'])],
+            ['metric' => 'auth.user_created', 'metadata' => array_replace($baseRecord['metadata'], ['userId' => 'u-register', 'source' => 'register'])],
+            ['metric' => 'auth.login', 'metadata' => array_replace($baseRecord['metadata'], ['userId' => 'u-login', 'sessionId' => 's-login'])],
+            ['metric' => 'auth.logout', 'metadata' => ['plan' => 'pro', 'userId' => 'u-logout', 'sessionId' => 's-logout']],
+            ['metric' => 'auth.email_verified', 'metadata' => array_replace($baseRecord['metadata'], ['userId' => 'u-verified'])],
+            ['metric' => 'auth.password_reset_completed', 'metadata' => ['plan' => 'pro', 'userId' => 'u-reset']],
+            ['metric' => 'auth.organisation_created', 'metadata' => array_replace($baseRecord['metadata'], ['organisationId' => 'o-created'])],
+            ['metric' => 'auth.organisation_invited', 'metadata' => ['plan' => 'pro', 'organisationId' => 'o-invite', 'invitationId' => 'i-invite', 'inviterUserId' => 'u-inviter']],
+            ['metric' => 'auth.organisation_invitation_accepted', 'metadata' => ['plan' => 'pro', 'organisationId' => 'o-accepted', 'invitationId' => 'i-accepted', 'inviterUserId' => 'u-inviter', 'userId' => 'u-accepted']],
+            ['metric' => 'auth.organisation_invitation_setup', 'metadata' => ['plan' => 'pro', 'organisationId' => 'o-setup', 'invitationId' => 'i-setup', 'inviterUserId' => 'u-inviter', 'userId' => 'u-setup']],
+            ['metric' => 'auth.organisation_member_added', 'metadata' => array_replace($baseRecord['metadata'], ['organisationId' => 'o-add', 'userId' => 'u-added'])],
+            ['metric' => 'auth.organisation_member_removed', 'metadata' => array_replace($baseRecord['metadata'], ['organisationId' => 'o-remove', 'userId' => 'u-removed'])],
+            ['metric' => 'auth.organisation_member_removed', 'metadata' => ['plan' => 'pro', 'organisationId' => 'o-leave', 'userId' => 'u-left']],
+        ], $recorded);
+    }
+
+    public function testDoesNotRecordExcludedMethodsOrFailedAuthCalls(): void
+    {
+        $analyticsCalls = 0;
+        $recorder = new class($analyticsCalls) {
+            public function __construct(private int &$calls)
+            {
+            }
+
+            public function record(array $body): void
+            {
+                ++$this->calls;
+            }
+        };
+        $recordAnalytics = ['analytics' => (object) ['events' => $recorder]];
+        $client = Client::create('prk_test', 'https://auth.example', static function (string $method, string $url): array {
+            $path = (string) parse_url($url, PHP_URL_PATH);
+            if ('/api/v1/users' === $path) {
+                return ['status' => 422, 'body' => '{"error":"Invalid user.","code":"invalid_user"}'];
+            }
+            if (str_ends_with($path, '/revoke')) {
+                return ['status' => 204, 'body' => ''];
+            }
+
+            return ['status' => 200, 'body' => '{"accepted":true,"valid":true,"sessionId":"s1","user":{"id":"u1"}}'];
+        });
+
+        try {
+            $client->createUser([], ['recordAnalytics' => $recordAnalytics]);
+            self::fail('Expected Auth failure.');
+        } catch (PartRocksError) {
+        }
+        $client->refreshSession(['refreshToken' => 'rt']);
+        $client->verifySession('jwt');
+        $client->requestEmailVerification(['email' => 'a@example.com']);
+        $client->requestPasswordReset(['email' => 'a@example.com']);
+        $client->revokeOrganisationInvitation('o1', 'revoke', 'jwt');
+
+        self::assertSame(0, $analyticsCalls);
+    }
+
+    public function testAnalyticsFailuresFailOpenAndMailRemainsIndependent(): void
+    {
+        $client = Client::create('prk_test', 'https://auth.example', static function (string $method, string $url): array {
+            return str_ends_with($url, '/api/v2/auth/register')
+                ? ['status' => 201, 'body' => '{"user":{"id":"u1"},"code":"123456"}']
+                : ['status' => 201, 'body' => '{"user":{"id":"u2"},"sessionId":"s2"}'];
+        });
+        $mailCalls = 0;
+        $mail = new class($mailCalls) {
+            public function __construct(private int &$calls)
+            {
+            }
+
+            public function send(array $body): void
+            {
+                ++$this->calls;
+            }
+        };
+        $quotaRecorder = new class {
+            public function record(array $body): array
+            {
+                return ['recorded' => false, 'code' => 'daily_quota_exceeded'];
+            }
+        };
+        $throwingRecorder = new class {
+            public function record(array $body): never
+            {
+                throw new \RuntimeException('analytics down');
+            }
+        };
+
+        $quota = $client->register(
+            ['email' => 'a@example.com', 'password' => 'password'],
+            [
+                'sendMail' => ['mail' => $mail, 'application' => 'Acme'],
+                'recordAnalytics' => ['analytics' => (object) ['events' => $quotaRecorder]],
+            ],
+        );
+        $thrown = $client->createSession(
+            ['username' => 'a@example.com', 'password' => 'password'],
+            ['recordAnalytics' => ['analytics' => (object) ['events' => $throwingRecorder]]],
+        );
+        $failingMail = new class {
+            public function send(array $body): never
+            {
+                throw new \RuntimeException('smtp down');
+            }
+        };
+        $successfulRecorder = new class {
+            public function record(array $body): array
+            {
+                return ['recorded' => true];
+            }
+        };
+        $mailFailure = $client->register(
+            ['email' => 'b@example.com', 'password' => 'password'],
+            [
+                'sendMail' => ['mail' => $failingMail, 'application' => 'Acme'],
+                'recordAnalytics' => ['analytics' => (object) ['events' => $successfulRecorder]],
+            ],
+        );
+
+        self::assertSame(1, $mailCalls);
+        self::assertTrue($quota['mailSent']);
+        self::assertFalse($quota['analyticsRecorded']);
+        self::assertSame('daily_quota_exceeded', $quota['analyticsError']);
+        self::assertSame('u1', $quota['user']['id']);
+        self::assertFalse($thrown['analyticsRecorded']);
+        self::assertSame('analytics down', $thrown['analyticsError']);
+        self::assertSame('u2', $thrown['user']['id']);
+        self::assertFalse($mailFailure['mailSent']);
+        self::assertSame('smtp down', $mailFailure['mailError']);
+        self::assertTrue($mailFailure['analyticsRecorded']);
+    }
+
+    public function testLogoutWithAnalyticsReturnsAStatusEnvelope(): void
+    {
+        $client = Client::create('prk_test', 'https://auth.example', fn (): array => ['status' => 204, 'body' => '']);
+        $recorder = new class {
+            public function record(array $body): array
+            {
+                return ['recorded' => true];
+            }
+        };
+
+        $result = $client->logout(['refreshToken' => 'rt'], ['recordAnalytics' => [
+            'analytics' => (object) ['events' => $recorder],
+            'metadata' => ['userId' => 'u1', 'sessionId' => 's1'],
+        ]]);
+
+        self::assertSame(['analyticsRecorded' => true], $result);
     }
 }
